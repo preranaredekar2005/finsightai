@@ -1,0 +1,26 @@
+{
+  "Logistic Regression": {
+    "Accuracy": 80.09,
+    "Precision": 61.75,
+    "Recall": 55.87,
+    "F1_Score": 58.31
+  },
+  "Random Forest": {
+    "Accuracy": 87.81,
+    "Precision": 84.22,
+    "Recall": 65.34,
+    "F1_Score": 71.94
+  },
+  "SVM": {
+    "Accuracy": 84.89,
+    "Precision": 74.46,
+    "Recall": 61.58,
+    "F1_Score": 66.33
+  },
+  "XGBoost": {
+    "Accuracy": 90.39,
+    "Precision": 85.21,
+    "Recall": 76.29,
+    "F1_Score": 80.19
+  }
+}
