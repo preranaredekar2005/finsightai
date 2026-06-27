@@ -32,8 +32,17 @@ if os.path.exists("frontend/dist"):
 def serve_frontend():
     return FileResponse("frontend/dist/index.html")
 
-DATABASE_URL = "postgresql://postgres:prerana123@localhost/finsight_ai"
-engine       = create_engine(DATABASE_URL)
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres:prerana123@localhost/finsight_ai"
+)
+try:
+    engine = create_engine(DATABASE_URL)
+    engine.connect()
+    DB_AVAILABLE = True
+except:
+    DB_AVAILABLE = False
+    engine = None
 analyzer     = SentimentIntensityAnalyzer()
 NEWS_API_KEY = "72aba2b041d445cc8a3fe2bb64c0c79a"
 
@@ -289,48 +298,94 @@ def get_sentiment(ticker: str):
     try:
         ticker = ticker.upper()
 
-        # Get from DB first
-        query = f"""
-            SELECT headline, source, published_at,
-                   sentiment_score, sentiment_label
-            FROM news_articles
-            WHERE ticker = '{ticker}'
-            ORDER BY published_at DESC
-            LIMIT 10
-        """
-        df = pd.read_sql(query, engine)
+        # Try database first, fall back to NewsAPI if no DB
+        if DB_AVAILABLE and engine:
+            try:
+                query = f"""
+                    SELECT headline, source, published_at,
+                           sentiment_score, sentiment_label
+                    FROM news_articles
+                    WHERE ticker = '{ticker}'
+                    ORDER BY published_at DESC
+                    LIMIT 10
+                """
+                df = pd.read_sql(query, engine)
+                if not df.empty:
+                    df["published_at"] = df["published_at"].astype(str)
+                    avg_sent = round(float(df["sentiment_score"].mean()), 3)
+                    if avg_sent > 0.05:
+                        mood = "Positive 📈"
+                    elif avg_sent < -0.05:
+                        mood = "Negative 📉"
+                    else:
+                        mood = "Neutral ➡️"
+                    return {
+                        "ticker":         ticker,
+                        "avg_sentiment":  avg_sent,
+                        "mood":           mood,
+                        "total_articles": len(df),
+                        "positive":       int((df["sentiment_label"]=="POSITIVE").sum()),
+                        "negative":       int((df["sentiment_label"]=="NEGATIVE").sum()),
+                        "neutral":        int((df["sentiment_label"]=="NEUTRAL").sum()),
+                        "articles":       df.to_dict(orient="records"),
+                    }
+            except:
+                pass
 
-        if df.empty:
-            return {
-                "ticker":        ticker,
-                "avg_sentiment": 0.0,
-                "articles":      [],
-                "summary":       "No news data available"
-            }
+        # Fall back to live NewsAPI
+        keyword_map = {
+            "AAPL": "Apple stock", "MSFT": "Microsoft stock",
+            "TSLA": "Tesla stock", "GOOGL": "Google stock",
+            "AMZN": "Amazon stock", "RELIANCE.NS": "Reliance Industries",
+            "TCS.NS": "TCS Tata Consultancy", "INFY.NS": "Infosys stock",
+            "HDFCBANK.NS": "HDFC Bank", "WIPRO.NS": "Wipro stock"
+        }
+        keyword = keyword_map.get(ticker, ticker)
+        url = "https://newsapi.org/v2/everything"
+        params = {
+            "q":        keyword,
+            "sortBy":   "publishedAt",
+            "language": "en",
+            "pageSize": 10,
+            "apiKey":   NEWS_API_KEY,
+        }
+        response = requests.get(url, params=params)
+        data     = response.json()
+        articles = data.get("articles", [])
 
-        df["published_at"] = df["published_at"].astype(str)
-        avg_sent = round(float(df["sentiment_score"].mean()), 3)
+        results = []
+        scores  = []
+        for a in articles:
+            headline = a.get("title", "")
+            if not headline or headline == "[Removed]":
+                continue
+            score = analyzer.polarity_scores(headline)["compound"]
+            label = "POSITIVE" if score >= 0.05 else "NEGATIVE" if score <= -0.05 else "NEUTRAL"
+            scores.append(score)
+            results.append({
+                "headline":        headline,
+                "source":          a.get("source", {}).get("name", ""),
+                "published_at":    a.get("publishedAt", "")[:10],
+                "sentiment_score": round(score, 3),
+                "sentiment_label": label,
+            })
 
-        if avg_sent > 0.05:
-            mood = "Positive 📈"
-        elif avg_sent < -0.05:
-            mood = "Negative 📉"
-        else:
-            mood = "Neutral ➡️"
+        avg_sent = round(sum(scores) / len(scores), 3) if scores else 0.0
+        mood = "Positive 📈" if avg_sent > 0.05 else "Negative 📉" if avg_sent < -0.05 else "Neutral ➡️"
 
         return {
-            "ticker":        ticker,
-            "avg_sentiment": avg_sent,
-            "mood":          mood,
-            "total_articles": len(df),
-            "positive":      int((df["sentiment_label"]=="POSITIVE").sum()),
-            "negative":      int((df["sentiment_label"]=="NEGATIVE").sum()),
-            "neutral":       int((df["sentiment_label"]=="NEUTRAL").sum()),
-            "articles": df.to_dict(orient="records"),
+            "ticker":         ticker,
+            "avg_sentiment":  avg_sent,
+            "mood":           mood,
+            "total_articles": len(results),
+            "positive":       sum(1 for r in results if r["sentiment_label"] == "POSITIVE"),
+            "negative":       sum(1 for r in results if r["sentiment_label"] == "NEGATIVE"),
+            "neutral":        sum(1 for r in results if r["sentiment_label"] == "NEUTRAL"),
+            "articles":       results,
         }
+
     except Exception as e:
         raise HTTPException(500, str(e))
-
 # ── 5. Full dashboard data ────────────────────────────────────
 @app.get("/api/dashboard/{ticker}")
 def get_dashboard(ticker: str):
