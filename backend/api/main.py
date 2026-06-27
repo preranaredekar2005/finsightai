@@ -1,4 +1,7 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, text
 import pandas as pd
@@ -21,6 +24,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Serve React frontend
+if os.path.exists("frontend/dist"):
+    app.mount("/assets", StaticFiles(directory="frontend/dist/assets"), name="assets")
+
+@app.get("/app")
+def serve_frontend():
+    return FileResponse("frontend/dist/index.html")
 
 DATABASE_URL = "postgresql://postgres:prerana123@localhost/finsight_ai"
 engine       = create_engine(DATABASE_URL)

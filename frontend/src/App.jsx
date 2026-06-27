@@ -5,7 +5,7 @@ import {
   Tooltip, ResponsiveContainer, BarChart, Bar
 } from "recharts"
 
-const API = "http://localhost:8000"
+const API = "https://finsightai-0in2.onrender.com"
 
 const TICKERS = {
   US: ["AAPL", "MSFT", "TSLA", "GOOGL", "AMZN"],
