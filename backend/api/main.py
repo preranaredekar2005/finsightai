@@ -49,8 +49,9 @@ except Exception as e:
     engine = None
     print(f"Database not available: {e}")
 
-analyzer     = SentimentIntensityAnalyzer()
-NEWS_API_KEY = "72aba2b041d445cc8a3fe2bb64c0c79a"
+analyzer       = SentimentIntensityAnalyzer()
+NEWS_API_KEY   = "72aba2b041d445cc8a3fe2bb64c0c79a"
+AV_API_KEY     = os.getenv("AV_API_KEY", "RL5ZQQRVIAERW0GR")
 
 # ── Load saved model ──────────────────────────────────────────
 with open("backend/models/saved/best_model.pkl",     "rb") as f:
@@ -80,7 +81,90 @@ KEYWORD_MAP = {
     "WIPRO.NS":    "Wipro stock",
 }
 
-# ── Helper: fetch live sentiment from NewsAPI ─────────────────
+# Alpha Vantage symbol mapping (NSE stocks need exchange prefix)
+AV_SYMBOL_MAP = {
+    "RELIANCE.NS": "BSE:RELIANCE",
+    "TCS.NS":      "BSE:TCS",
+    "INFY.NS":     "BSE:INFY",
+    "HDFCBANK.NS": "BSE:HDFCBANK",
+    "WIPRO.NS":    "BSE:WIPRO",
+}
+
+# ── Helper: fetch price from Alpha Vantage ────────────────────
+def fetch_av_price(ticker: str) -> pd.DataFrame:
+    """Fetch daily price data from Alpha Vantage API."""
+    av_symbol = AV_SYMBOL_MAP.get(ticker, ticker)
+    url = "https://www.alphavantage.co/query"
+    params = {
+        "function":   "TIME_SERIES_DAILY_ADJUSTED",
+        "symbol":     av_symbol,
+        "outputsize": "compact",  # last 100 days
+        "apikey":     AV_API_KEY,
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=15)
+        data = resp.json()
+
+        ts = data.get("Time Series (Daily)", {})
+        if not ts:
+            print(f"AV no data for {ticker}: {list(data.keys())}")
+            return pd.DataFrame()
+
+        rows = []
+        for date_str, vals in ts.items():
+            rows.append({
+                "Date":   pd.to_datetime(date_str),
+                "Open":   float(vals["1. open"]),
+                "High":   float(vals["2. high"]),
+                "Low":    float(vals["3. low"]),
+                "Close":  float(vals["5. adjusted close"]),
+                "Volume": float(vals["6. volume"]),
+            })
+
+        df = pd.DataFrame(rows).sort_values("Date").reset_index(drop=True)
+        df = df.set_index("Date")
+        return df
+
+    except Exception as e:
+        print(f"Alpha Vantage error for {ticker}: {e}")
+        return pd.DataFrame()
+
+# ── Helper: download price data ───────────────────────────────
+def download_price(ticker: str, period: str = "6mo") -> pd.DataFrame:
+    """Try yfinance first, fall back to Alpha Vantage."""
+    # Try yfinance
+    try:
+        data = yf.download(
+            ticker, period=period,
+            auto_adjust=True, progress=False,
+            timeout=15
+        )
+        if not data.empty:
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = [c[0] for c in data.columns]
+            print(f"yfinance success for {ticker}")
+            return data
+    except Exception as e:
+        print(f"yfinance failed for {ticker}: {e}")
+
+    # Try yf.Ticker fallback
+    try:
+        t    = yf.Ticker(ticker)
+        data = t.history(period=period, auto_adjust=True)
+        if not data.empty:
+            print(f"yf.Ticker success for {ticker}")
+            return data
+    except Exception as e:
+        print(f"yf.Ticker failed for {ticker}: {e}")
+
+    # Fall back to Alpha Vantage
+    print(f"Trying Alpha Vantage for {ticker}...")
+    data = fetch_av_price(ticker)
+    if not data.empty:
+        print(f"Alpha Vantage success for {ticker}")
+    return data
+
+# ── Helper: fetch live sentiment ──────────────────────────────
 def fetch_live_sentiment(ticker: str):
     keyword = KEYWORD_MAP.get(ticker, ticker)
     url     = "https://newsapi.org/v2/everything"
@@ -129,12 +213,10 @@ def compute_features(df: pd.DataFrame, avg_sentiment: float = 0.1) -> dict:
 
     rsi_ind  = RSIIndicator(close=close, window=14)
     rsi      = rsi_ind.rsi()
-
     macd_ind = MACD(close=close, window_slow=26, window_fast=12, window_sign=9)
     macd     = macd_ind.macd()
     macd_sig = macd_ind.macd_signal()
     macd_hist= macd_ind.macd_diff()
-
     bb       = BollingerBands(close=close, window=20, window_dev=2)
     bb_upper = bb.bollinger_hband()
     bb_mid   = bb.bollinger_mavg()
@@ -209,33 +291,6 @@ def compute_features(df: pd.DataFrame, avg_sentiment: float = 0.1) -> dict:
         "pct_negative":   20.0,
     }
 
-# ── Helper: download price data ───────────────────────────────
-def download_price(ticker: str, period: str = "6mo") -> pd.DataFrame:
-    """Try multiple methods to get price data."""
-    try:
-        data = yf.download(
-            ticker, period=period,
-            auto_adjust=True, progress=False,
-            timeout=30
-        )
-        if not data.empty:
-            if isinstance(data.columns, pd.MultiIndex):
-                data.columns = [c[0] for c in data.columns]
-            return data
-    except Exception as e:
-        print(f"yfinance error: {e}")
-
-    # Try with yf.Ticker as fallback
-    try:
-        t    = yf.Ticker(ticker)
-        data = t.history(period=period, auto_adjust=True)
-        if not data.empty:
-            return data
-    except Exception as e:
-        print(f"yf.Ticker error: {e}")
-
-    return pd.DataFrame()
-
 # ─────────────────────────────────────────────────────────────
 # ENDPOINTS
 # ─────────────────────────────────────────────────────────────
@@ -273,7 +328,7 @@ def get_price(ticker: str, period: str = "6mo"):
             raise HTTPException(404, f"No data for {ticker}")
 
         data = data.reset_index()
-        data["Date"] = data["Date"].astype(str)
+        data["Date"] = pd.to_datetime(data["Date"]).dt.strftime("%Y-%m-%d")
 
         return {
             "ticker":        ticker,
@@ -312,7 +367,6 @@ def get_signal(ticker: str):
         if data.empty:
             raise HTTPException(404, f"No data for {ticker}")
 
-        # Get sentiment
         avg_sent = 0.1
         if DB_AVAILABLE and engine:
             try:
@@ -366,7 +420,6 @@ def get_sentiment(ticker: str):
     try:
         ticker = ticker.upper()
 
-        # Try DB first
         if DB_AVAILABLE and engine:
             try:
                 query = f"""
@@ -396,7 +449,6 @@ def get_sentiment(ticker: str):
             except Exception:
                 pass
 
-        # Fall back to live NewsAPI
         avg_sent, results = fetch_live_sentiment(ticker)
         mood = ("Positive 📈" if avg_sent > 0.05
                 else "Negative 📉" if avg_sent < -0.05
