@@ -5,8 +5,7 @@ import {
   Tooltip, ResponsiveContainer, BarChart, Bar
 } from "recharts"
 
-const API = "https://finsightai-0in2.onrender.com"
-
+const API = import.meta.env.VITE_API_URL || "http://localhost:8000"
 const TICKERS = {
   US: ["AAPL", "MSFT", "TSLA", "GOOGL", "AMZN"],
   India: ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "WIPRO.NS"]
