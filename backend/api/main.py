@@ -50,7 +50,7 @@ except Exception as e:
     print(f"Database not available: {e}")
 
 analyzer       = SentimentIntensityAnalyzer()
-NEWS_API_KEY   = "72aba2b041d445cc8a3fe2bb64c0c79a"
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 AV_API_KEY     = os.getenv("AV_API_KEY", "RL5ZQQRVIAERW0GR")
 
 # ── Load saved model ──────────────────────────────────────────
