@@ -7,7 +7,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import (accuracy_score, precision_score,
                              recall_score, f1_score,
                              classification_report)
@@ -28,7 +27,8 @@ print("  HOLD = everything else")
 print("  Prerana Amit Redekar | PRN: 25070243030")
 print("="*65)
 
-# ── Load ──────────────────────────────────────────────────────
+# ── Load data ─────────────────────────────────────────────────
+print("\nLoading data from database...")
 prices = pd.read_sql("""
     SELECT ticker, date, open, high, low, close, volume
     FROM stock_prices ORDER BY ticker, date
@@ -50,11 +50,26 @@ sentiment = pd.read_sql("""
     FROM news_articles GROUP BY ticker
 """, engine)
 
+print(f"  Prices      : {len(prices):,} rows | {prices['ticker'].nunique()} tickers")
+print(f"  Indicators  : {len(indicators):,} rows")
+print(f"  Sentiment   : {len(sentiment)} tickers with news data")
+
 prices["date"]     = pd.to_datetime(prices["date"])
 indicators["date"] = pd.to_datetime(indicators["date"])
+
 df = pd.merge(prices, indicators, on=["ticker","date"], how="inner")
 df = pd.merge(df, sentiment, on="ticker", how="left")
+
+# Fill missing sentiment for tickers with no news (indices etc.)
+df["avg_sentiment"] = df["avg_sentiment"].fillna(0.0)
+df["pct_positive"]  = df["pct_positive"].fillna(50.0)
+df["pct_negative"]  = df["pct_negative"].fillna(20.0)
+
+# Fill missing volume for indices
+df["volume"] = df["volume"].fillna(0)
+
 df = df.sort_values(["ticker","date"]).reset_index(drop=True)
+print(f"  Merged dataset: {len(df):,} rows")
 
 # ── Feature engineering ───────────────────────────────────────
 print("\nEngineering features...")
@@ -68,10 +83,11 @@ for ticker in df["ticker"].unique():
     for p in [1,2,3,5,10,20]:
         t[f"ret_{p}d"] = t["close"].pct_change(p)
 
-    # Volume
-    vol_ma         = t["volume"].rolling(20).mean()
-    t["vol_ratio"] = t["volume"] / (vol_ma + 1)
-    t["vol_change"]= t["volume"].pct_change()
+    # Volume — fix zero volume for indices using ffill
+    t["volume"]     = t["volume"].replace(0, np.nan).ffill().fillna(1)
+    vol_ma          = t["volume"].rolling(20).mean()
+    t["vol_ratio"]  = t["volume"] / (vol_ma + 1)
+    t["vol_change"] = t["volume"].pct_change()
 
     # MA crossovers
     for w in [5,10,20,50]:
@@ -91,49 +107,43 @@ for ticker in df["ticker"].unique():
     t["rsi_ma10"]    = t["rsi"].rolling(10).mean()
     t["rsi_accel"]   = t["rsi"].diff(1).diff(1)
 
-    # MACD
+    # MACD features
     t["macd_cross"]  = t["macd"] - t["macd_signal"]
     t["macd_slope"]  = t["macd"].diff(3)
     t["macd_prev"]   = t["macd"].shift(1)
     t["macd_x_prev"] = (t["macd"] - t["macd_signal"]).shift(1)
 
-    # BB
-    t["bb_width"]    = (t["bb_upper"] - t["bb_lower"]) / (t["bb_middle"] + 1e-9)
-    t["bb_slope"]    = t["bb_pct"].diff(3)
-    t["bb_prev"]     = t["bb_pct"].shift(1)
+    # Bollinger Band features
+    t["bb_width"] = (t["bb_upper"] - t["bb_lower"]) / (t["bb_middle"] + 1e-9)
+    t["bb_slope"] = t["bb_pct"].diff(3)
+    t["bb_prev"]  = t["bb_pct"].shift(1)
 
-    # Candle
-    t["day_range"]   = (t["high"] - t["low"]) / (t["close"] + 1e-9)
-    t["is_bullish"]  = (t["close"] > t["open"]).astype(int)
-    t["body_size"]   = abs(t["close"] - t["open"]) / (t["close"] + 1e-9)
+    # Candle features
+    t["day_range"]  = (t["high"] - t["low"]) / (t["close"] + 1e-9)
+    t["is_bullish"] = (t["close"] > t["open"]).astype(int)
+    t["body_size"]  = abs(t["close"] - t["open"]) / (t["close"] + 1e-9)
 
     # Daily sentiment proxy
     candle    = (t["close"] - t["open"]) / (t["close"].abs() + 1e-9)
-    raw_sent  = (ret * 0.5 + candle * 0.3 + (t["vol_ratio"] - 1) * 0.2)
     real_sent = float(t["avg_sentiment"].iloc[0])
-    t["daily_sent"]  = (0.7 * raw_sent + 0.3 * real_sent).clip(-1, 1)
-    t["sent_3d"]     = t["daily_sent"].rolling(3).mean()
-    t["sent_5d"]     = t["daily_sent"].rolling(5).mean()
-    t["sent_mom"]    = t["daily_sent"].diff(3)
+    raw_sent  = (ret * 0.5 + candle * 0.3 + (t["vol_ratio"] - 1) * 0.2)
+    t["daily_sent"] = (0.7 * raw_sent + 0.3 * real_sent).clip(-1, 1)
+    t["sent_3d"]    = t["daily_sent"].rolling(3).mean()
+    t["sent_5d"]    = t["daily_sent"].rolling(5).mean()
+    t["sent_mom"]   = t["daily_sent"].diff(3)
 
     # Lag features
     for lag in [1,2,3,5]:
         t[f"ret_l{lag}"]  = t["ret_1d"].shift(lag)
         t[f"sent_l{lag}"] = t["daily_sent"].shift(lag)
 
-    # Rolling stats
-    t["ret_std5"]    = t["ret_1d"].rolling(5).std()
-    t["ret_std20"]   = t["ret_1d"].rolling(20).std()
-    t["ret_mean5"]   = t["ret_1d"].rolling(5).mean()
-    t["ret_mean20"]  = t["ret_1d"].rolling(20).mean()
+    # Rolling statistics
+    t["ret_std5"]   = t["ret_1d"].rolling(5).std()
+    t["ret_std20"]  = t["ret_1d"].rolling(20).std()
+    t["ret_mean5"]  = t["ret_1d"].rolling(5).mean()
+    t["ret_mean20"] = t["ret_1d"].rolling(20).mean()
 
-    # ── TARGET: RSI Crossover Signal ─────────────────────────
-    # BUY  = RSI was below 30 yesterday and crosses above 30 today
-    #        OR RSI crosses above its 10-day MA from below
-    # SELL = RSI was above 70 yesterday and crosses below 70 today
-    #        OR RSI crosses below its 10-day MA from above
-    # HOLD = everything else
-
+    # ── TARGET: RSI Crossover Signal ──────────────────────────
     rsi_cross_buy = (
         ((t["rsi"] > 30) & (t["rsi_prev"] <= 30)) |
         ((t["rsi"] > t["rsi_ma10"]) & (t["rsi_prev"] <= t["rsi_ma10"].shift(1)))
@@ -143,7 +153,7 @@ for ticker in df["ticker"].unique():
         ((t["rsi"] < t["rsi_ma10"]) & (t["rsi_prev"] >= t["rsi_ma10"].shift(1)))
     )
 
-    t["signal"] = 1  # HOLD
+    t["signal"] = 1  # HOLD default
     t.loc[rsi_cross_buy,  "signal"] = 2  # BUY
     t.loc[rsi_cross_sell, "signal"] = 0  # SELL
 
@@ -151,40 +161,61 @@ for ticker in df["ticker"].unique():
 
 full_df = pd.concat(all_dfs).reset_index(drop=True)
 
+# ── Feature list ──────────────────────────────────────────────
 FEATURES = [
-    # Core RSI features — most important
+    # Core RSI features
     "rsi", "rsi_prev", "rsi_prev2", "rsi_prev3",
     "rsi_slope", "rsi_slope3", "rsi_accel",
     "rsi_dist_70", "rsi_dist_30", "rsi_dist_50",
     "rsi_ma5", "rsi_ma10",
-    # MACD
+    # MACD features
     "macd", "macd_signal", "macd_hist",
     "macd_cross", "macd_slope", "macd_prev", "macd_x_prev",
-    # BB
+    # Bollinger Band features
     "bb_pct", "bb_width", "bb_slope", "bb_prev",
-    # Returns
+    # Return features
     "ret_1d", "ret_2d", "ret_3d", "ret_5d", "ret_10d", "ret_20d",
-    # MA crossovers
+    # MA crossover features
     "ma5_cross", "ma10_cross", "ma20_cross", "ma50_cross",
-    # Volume
+    # Volume features
     "vol_ratio", "vol_change",
-    # Candle
+    # Candle features
     "day_range", "is_bullish", "body_size",
-    # Lag returns
+    # Lag return features
     "ret_l1", "ret_l2", "ret_l3", "ret_l5",
-    # Sentiment
+    # Sentiment features
     "daily_sent", "sent_3d", "sent_5d", "sent_mom",
     "sent_l1", "sent_l2", "sent_l3", "sent_l5",
-    # Rolling stats
+    # Rolling stat features
     "ret_std5", "ret_std20", "ret_mean5", "ret_mean20",
     # Static sentiment
     "avg_sentiment", "pct_positive", "pct_negative",
 ]
 
+# ── Clean dataset ─────────────────────────────────────────────
+print("\nCleaning dataset...")
 clean = full_df.dropna(subset=FEATURES + ["signal"])
+clean = clean.copy()
 clean["signal"] = clean["signal"].astype(int)
 
-print(f"  Dataset : {len(clean):,} rows")
+# Remove infinity values
+clean = clean.replace([np.inf, -np.inf], np.nan)
+clean = clean.dropna(subset=FEATURES)
+
+# Clip extreme outliers to 0.1% and 99.9% percentiles
+print("  Clipping extreme values...")
+for col in FEATURES:
+    q_low  = clean[col].quantile(0.001)
+    q_high = clean[col].quantile(0.999)
+    clean[col] = clean[col].clip(q_low, q_high)
+
+# Final NaN check
+remaining_nan = clean[FEATURES].isna().sum().sum()
+remaining_inf = np.isinf(clean[FEATURES].values).sum()
+print(f"  Remaining NaN    : {remaining_nan}")
+print(f"  Remaining Inf    : {remaining_inf}")
+
+print(f"\n  Dataset : {len(clean):,} rows")
 print(f"  SELL(0) : {(clean['signal']==0).sum():,}")
 print(f"  HOLD(1) : {(clean['signal']==1).sum():,}")
 print(f"  BUY (2) : {(clean['signal']==2).sum():,}")
@@ -202,7 +233,8 @@ sc      = StandardScaler()
 X_train = sc.fit_transform(X_train)
 X_test  = sc.transform(X_test)
 
-print(f"\n  Train: {len(X_train):,} | Test: {len(X_test):,}")
+print(f"\n  Train : {len(X_train):,} rows")
+print(f"  Test  : {len(X_test):,} rows")
 
 # ── Models ────────────────────────────────────────────────────
 MODELS = {
@@ -223,12 +255,12 @@ MODELS = {
 }
 
 print("\nTraining all 4 models...")
+print("─"*65)
 summary_rows = []
 all_results  = {}
 best_acc     = 0
 best_model   = None
 best_name    = ""
-best_sc      = None
 
 for name, model in MODELS.items():
     model.fit(X_train, y_train)
@@ -251,7 +283,6 @@ for name, model in MODELS.items():
         best_acc   = acc
         best_model = model
         best_name  = name
-        best_sc    = sc
 
     print(f"  {name:22s} → "
           f"Acc:{acc:6.2f}%  "
@@ -259,8 +290,8 @@ for name, model in MODELS.items():
           f"Rec:{rec:6.2f}%  "
           f"F1:{f1:6.2f}%")
 
-# ── Classification report for best model ──────────────────────
-print(f"\n  Detailed report for {best_name}:")
+# ── Detailed classification report ────────────────────────────
+print(f"\n  Detailed report for best model ({best_name}):")
 preds_best = best_model.predict(X_test)
 print(classification_report(
     y_test, preds_best,
@@ -268,11 +299,15 @@ print(classification_report(
     zero_division=0
 ))
 
-# ── Save ──────────────────────────────────────────────────────
+# ── Save best model ───────────────────────────────────────────
+sc_final = StandardScaler()
+sc_final.fit_transform(X)
+best_model.fit(sc_final.transform(X), y)
+
 with open("backend/models/saved/best_model.pkl",     "wb") as f:
     pickle.dump(best_model, f)
 with open("backend/models/saved/best_scaler.pkl",    "wb") as f:
-    pickle.dump(best_sc, f)
+    pickle.dump(sc, f)
 with open("backend/models/saved/best_features.json", "w") as f:
     json.dump(FEATURES, f)
 with open("backend/models/saved/all_results.json",   "w") as f:
@@ -281,9 +316,10 @@ with open("backend/models/saved/all_results.json",   "w") as f:
 pd.DataFrame(summary_rows).to_csv(
     "backend/models/saved/model_comparison.csv", index=False)
 
-# ── Final report ──────────────────────────────────────────────
+# ── Final summary ─────────────────────────────────────────────
 print("\n" + "="*65)
 print("  FINAL RESULTS — RSI Crossover Signal Prediction")
+print("  Dataset: 2014-2025 | 20 Tickers | US + NSE + BSE + Indices")
 print("="*65)
 print(f"\n{'Model':<24} {'Accuracy':>9} {'Precision':>10}"
       f" {'Recall':>8} {'F1':>8}")
@@ -304,5 +340,9 @@ if best_acc > 68.5:
 else:
     print(f"  Status: ❌ ({best_acc:.2f}% vs 68.50%)")
 
-print("\n✅ Best model saved!")
-print("   Ready for Phase 8 — FastAPI Backend!")
+print(f"\n  Data range    : 2014-01-01 to 2025-06-27")
+print(f"  Total tickers : 20 (5 US + 10 NSE + 2 BSE + 3 Indices)")
+print(f"  Total rows    : {len(clean):,}")
+print(f"  Features used : {len(FEATURES)}")
+print("\n✅ All models saved to backend/models/saved/")
+print("   Ready for CSV export and EDA!")

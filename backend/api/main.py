@@ -54,20 +54,63 @@ NEWS_API_KEY   = "72aba2b041d445cc8a3fe2bb64c0c79a"
 AV_API_KEY     = os.getenv("AV_API_KEY", "RL5ZQQRVIAERW0GR")
 
 # ── Load saved model ──────────────────────────────────────────
-with open("backend/models/saved/best_model.pkl",     "rb") as f:
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+MODEL_DIR = BASE_DIR / "models" / "saved"
+
+with open(MODEL_DIR / "best_model.pkl", "rb") as f:
     model = pickle.load(f)
-with open("backend/models/saved/best_scaler.pkl",    "rb") as f:
+
+with open(MODEL_DIR / "best_scaler.pkl", "rb") as f:
     scaler = pickle.load(f)
-with open("backend/models/saved/best_features.json", "r") as f:
+
+with open(MODEL_DIR / "best_features.json", "r") as f:
     FEATURES = json.load(f)
 
 SIGNAL_MAP   = {0: "SELL", 1: "HOLD", 2: "BUY"}
 SIGNAL_COLOR = {0: "red",  1: "yellow", 2: "green"}
 
-US_TICKERS  = ["AAPL", "MSFT", "TSLA", "GOOGL", "AMZN"]
-IN_TICKERS  = ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "WIPRO.NS"]
-ALL_TICKERS = US_TICKERS + IN_TICKERS
+# ── Supported Tickers ─────────────────────────────────────────
 
+US_TICKERS = [
+    "AAPL",
+    "MSFT",
+    "TSLA",
+    "GOOGL",
+    "AMZN",
+]
+
+NSE_TICKERS = [
+    "RELIANCE.NS",
+    "TCS.NS",
+    "INFY.NS",
+    "HDFCBANK.NS",
+    "WIPRO.NS",
+    "ICICIBANK.NS",
+    "SBIN.NS",
+    "HINDUNILVR.NS",
+    "KOTAKBANK.NS",
+    "BAJFINANCE.NS",
+]
+
+BSE_TICKERS = [
+    "TCS.BO",
+    "WIPRO.BO",
+]
+
+INDEX_TICKERS = [
+    "^NSEI",
+    "^NSEBANK",
+    "^BSESN",
+]
+
+ALL_TICKERS = (
+    US_TICKERS
+    + NSE_TICKERS
+    + BSE_TICKERS
+    + INDEX_TICKERS
+)
 KEYWORD_MAP = {
     "AAPL":        "Apple stock",
     "MSFT":        "Microsoft stock",
@@ -315,7 +358,13 @@ def root():
 # 1. Tickers
 @app.get("/api/tickers")
 def get_tickers():
-    return {"us_tickers": US_TICKERS, "indian_tickers": IN_TICKERS, "all": ALL_TICKERS}
+    return {
+        "us_tickers": US_TICKERS,
+        "nse_tickers": NSE_TICKERS,
+        "bse_tickers": BSE_TICKERS,
+        "indices": INDEX_TICKERS,
+        "all": ALL_TICKERS,
+    }
 
 # 2. Live price
 @app.get("/api/price/{ticker}")
@@ -485,16 +534,25 @@ def get_dashboard(ticker: str):
 @app.get("/api/model-results")
 def get_model_results():
     try:
-        with open("backend/models/saved/all_results.json", "r") as f:
+        with open(MODEL_DIR / "all_results.json", "r") as f:
             results = json.load(f)
-        df = pd.read_csv("backend/models/saved/model_comparison.csv")
+
+        df = pd.read_csv(MODEL_DIR / "model_comparison.csv")
+
+        best_model = max(
+            results,
+            key=lambda m: results[m]["Accuracy"]
+        )
+
         return {
-            "results":       results,
-            "summary":       df.to_dict(orient="records"),
-            "best_model":    "XGBoost",
-            "best_accuracy": 90.39,
-            "benchmark":     68.50,
-            "improvement":   21.89,
+            "results": results,
+            "best_model": best_model,
+            "comparison": df.to_dict(orient="records")
         }
+
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+    

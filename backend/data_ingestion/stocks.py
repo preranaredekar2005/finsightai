@@ -6,9 +6,25 @@ DATABASE_URL = "postgresql://postgres:prerana123@localhost/finsight_ai"
 engine = create_engine(DATABASE_URL)
 
 tickers = [
+    # US Equities
     "AAPL", "MSFT", "TSLA", "GOOGL", "AMZN",
+
+    # NSE Stocks
     "RELIANCE.NS", "TCS.NS", "INFY.NS",
-    "HDFCBANK.NS", "WIPRO.NS"
+    "HDFCBANK.NS", "WIPRO.NS",
+
+    # Additional NSE Stocks
+    "ICICIBANK.NS", "SBIN.NS", "BAJFINANCE.NS",
+    "KOTAKBANK.NS", "HINDUNILVR.NS",
+
+    # BSE Stocks (same companies, BSE listing)
+    "RELIANCE.BO", "TCS.BO", "INFY.BO",
+    "HDFCBANK.BO", "WIPRO.BO",
+
+    # Indian Indices
+    "^NSEI",   # Nifty 50
+    "^BSESN",  # BSE Sensex
+    "^NSEBANK", # Nifty Bank
 ]
 
 for ticker in tickers:
@@ -16,8 +32,8 @@ for ticker in tickers:
 
     df = yf.download(
         ticker,
-        start="2020-01-01",
-        end="2024-12-31",
+        start="2014-01-01",
+        end="2025-06-30",
         auto_adjust=True,
         progress=False
     )
@@ -36,11 +52,15 @@ for ticker in tickers:
     # Reset index — date comes from index
     df.reset_index(inplace=True)
 
-    # Rename 'Date' → 'date' (capital D after reset_index)
+    # Rename 'Date' → 'date'
     df.rename(columns={"Date": "date"}, inplace=True)
 
-    df["date"] = pd.to_datetime(df["date"])
+    df["date"]   = pd.to_datetime(df["date"])
     df["ticker"] = ticker
+
+    # Handle indices — they may not have volume
+    if "volume" not in df.columns:
+        df["volume"] = 0
 
     df = df[["ticker", "date", "open", "high", "low", "close", "volume"]]
 
@@ -62,3 +82,13 @@ for ticker in tickers:
     print(f"  {ticker}: {len(df)} rows saved successfully!")
 
 print("\nAll tickers done!")
+print("\nSummary:")
+summary = pd.read_sql("""
+    SELECT ticker, COUNT(*) as rows,
+           MIN(date) as from_date,
+           MAX(date) as to_date
+    FROM stock_prices
+    GROUP BY ticker
+    ORDER BY ticker
+""", engine)
+print(summary.to_string(index=False))

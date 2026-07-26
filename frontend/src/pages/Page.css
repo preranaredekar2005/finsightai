@@ -1,0 +1,65 @@
+.page{
+padding:40px;
+color:#e2e8f0;
+}
+
+.page h1{
+margin-bottom:25px;
+color:white;
+}
+
+.page p{
+color:#cbd5e1;
+font-size:17px;
+line-height:1.7;
+}
+
+.info-grid{
+display:grid;
+grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+gap:20px;
+margin-top:30px;
+}
+
+.info-card{
+background:#1e293b;
+padding:25px;
+border-radius:16px;
+box-shadow:0 5px 20px rgba(0,0,0,.25);
+}
+
+.info-card h2{
+margin-bottom:15px;
+color:white;
+}
+
+.info-card ul{
+margin-left:20px;
+line-height:2;
+}
+
+.comparison-table{
+width:100%;
+border-collapse:collapse;
+margin-top:25px;
+background:#1e293b;
+border-radius:12px;
+overflow:hidden;
+}
+
+.comparison-table th{
+background:#2563eb;
+color:white;
+padding:15px;
+}
+
+.comparison-table td{
+padding:15px;
+text-align:center;
+color:white;
+border-bottom:1px solid rgba(255,255,255,.08);
+}
+
+.comparison-table tr:hover{
+background:#334155;
+}
