@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import axios from "axios";
+import {
+  getPrice,
+  getSignal,
+  getSentiment,
+} from "../services/api";
+
 import {
   ResponsiveContainer,
   BarChart,
@@ -10,12 +15,10 @@ import {
   YAxis,
   Legend,
   LineChart,
-  Line
+  Line,
 } from "recharts";
 
 import "./Comparison.css";
-
-const API = "http://127.0.0.1:8000/api";
 
 const STOCKS = [
   "AAPL",
@@ -27,56 +30,60 @@ const STOCKS = [
   "TCS.NS",
   "INFY.NS",
   "HDFCBANK.NS",
-  "WIPRO.NS"
+  "WIPRO.NS",
 ];
 
 export default function Comparison2025() {
 
-  const [ticker,setTicker]=useState("AAPL");
+  const [ticker, setTicker] = useState("AAPL");
 
-  const [price,setPrice]=useState(null);
+  const [price, setPrice] = useState(null);
 
-  const [signal,setSignal]=useState(null);
+  const [signal, setSignal] = useState(null);
 
-  const [sentiment,setSentiment]=useState(null);
+  const [sentiment, setSentiment] = useState(null);
 
-  const [loading,setLoading]=useState(true);
+  const [loading, setLoading] = useState(true);
 
-  const historicalData={
+  const [error, setError] = useState(false);
 
-    avgPrice:186.42,
+  const historicalData = {
 
-    avgVolume:42100000,
+    avgPrice: 186.42,
 
-    avgRSI:54.1,
+    avgVolume: 42100000,
 
-    avgVolatility:1.82,
+    avgRSI: 54.1,
 
-    bullish:61,
+    avgVolatility: 1.82,
 
-    bearish:39
+    bullish: 61,
+
+    bearish: 39,
 
   };
 
-  useEffect(()=>{
+  useEffect(() => {
 
     loadData(ticker);
 
-  },[ticker]);
+  }, [ticker]);
 
-  async function loadData(stock){
+  async function loadData(stock) {
 
     setLoading(true);
 
-    try{
+    setError(false);
 
-      const [priceRes,signalRes,sentimentRes]=await Promise.all([
+    try {
 
-        axios.get(`${API}/price/${stock}`),
+      const [priceRes, signalRes, sentimentRes] = await Promise.all([
 
-        axios.get(`${API}/signal/${stock}`),
+        getPrice(stock),
 
-        axios.get(`${API}/sentiment/${stock}`)
+        getSignal(stock),
+
+        getSentiment(stock),
 
       ]);
 
@@ -88,19 +95,25 @@ export default function Comparison2025() {
 
     }
 
-    catch(err){
+    catch (err) {
 
-      console.log(err);
+      console.error(err);
+
+      setError(true);
 
     }
 
-    setLoading(false);
+    finally {
+
+      setLoading(false);
+
+    }
 
   }
 
-  if(loading){
+  if (loading) {
 
-    return(
+    return (
 
       <div className="comparison-page">
 
@@ -112,61 +125,73 @@ export default function Comparison2025() {
 
   }
 
-  const comparisonChart=[
+  if (error || !price || !signal || !sentiment) {
 
-    {
+    return (
 
-      metric:"Price",
+      <div className="comparison-page">
 
-      Historical:historicalData.avgPrice,
+        <h2>Unable to load comparison data.</h2>
 
-      Current:price.current_price
+      </div>
 
-    },
+    );
 
-    {
+  }
 
-      metric:"Volume(M)",
+  const comparisonChart = [
+  {
 
-      Historical:historicalData.avgVolume/1000000,
+    metric: "Price",
 
-      Current:price.volume/1000000
+    Historical: historicalData.avgPrice,
 
-    },
+    Current: price.current_price,
 
-    {
+  },
 
-      metric:"RSI",
+  {
 
-      Historical:historicalData.avgRSI,
+    metric: "Volume (M)",
 
-      Current:signal.rsi
+    Historical: historicalData.avgVolume / 1000000,
 
-    }
+    Current: price.volume / 1000000,
 
-  ];
+  },
 
-  const trendData=[
+  {
 
-    {
+    metric: "RSI",
 
-      name:"Historical",
+    Historical: historicalData.avgRSI,
 
-      value:historicalData.avgPrice
+    Current: signal.rsi,
 
-    },
+  },
 
-    {
+];
 
-      name:"Current",
+const trendData = [
 
-      value:price.current_price
+  {
 
-    }
+    name: "Historical",
 
-  ];
+    value: historicalData.avgPrice,
 
-  return(
+  },
+
+  {
+
+    name: "Current",
+
+    value: price.current_price,
+
+  },
+
+];
+return (
 
 <div className="comparison-page">
 
@@ -179,7 +204,6 @@ Historical vs Current Market Analysis
 <p className="subtitle">
 
 Compare long-term market behaviour (2014–2024)
-
 with today's live market data.
 
 </p>
@@ -228,11 +252,7 @@ value={stock}
 
 <div className="compare-card">
 
-<h3>
-
-Historical Average Price
-
-</h3>
+<h3>Historical Average Price</h3>
 
 <h2>
 
@@ -250,11 +270,7 @@ ${historicalData.avgPrice.toFixed(2)}
 
 <div className="compare-card">
 
-<h3>
-
-Current Price
-
-</h3>
+<h3>Current Price</h3>
 
 <h2>
 
@@ -272,11 +288,7 @@ Live Market
 
 <div className="compare-card">
 
-<h3>
-
-Historical RSI
-
-</h3>
+<h3>Historical RSI</h3>
 
 <h2>
 
@@ -288,11 +300,7 @@ Historical RSI
 
 <div className="compare-card">
 
-<h3>
-
-Current RSI
-
-</h3>
+<h3>Current RSI</h3>
 
 <h2>
 
@@ -301,13 +309,10 @@ Current RSI
 </h2>
 
 </div>
+
 <div className="compare-card">
 
-<h3>
-
-Historical Volume
-
-</h3>
+<h3>Historical Volume</h3>
 
 <h2>
 
@@ -319,11 +324,7 @@ Historical Volume
 
 <div className="compare-card">
 
-<h3>
-
-Current Volume
-
-</h3>
+<h3>Current Volume</h3>
 
 <h2>
 
@@ -335,11 +336,7 @@ Current Volume
 
 <div className="compare-card">
 
-<h3>
-
-Historical Trend
-
-</h3>
+<h3>Historical Trend</h3>
 
 <h2>
 
@@ -357,11 +354,7 @@ Bullish
 
 <div className="compare-card">
 
-<h3>
-
-Current AI Signal
-
-</h3>
+<h3>Current AI Signal</h3>
 
 <h2>
 
@@ -388,12 +381,17 @@ Historical vs Current Comparison
 </h2>
 
 <ResponsiveContainer
+
 width="100%"
+
 height={420}
+
 >
 
 <BarChart
+
 data={comparisonChart}
+
 >
 
 <CartesianGrid strokeDasharray="3 3"/>
@@ -407,13 +405,19 @@ data={comparisonChart}
 <Legend/>
 
 <Bar
+
 dataKey="Historical"
+
 fill="#3b82f6"
+
 />
 
 <Bar
+
 dataKey="Current"
+
 fill="#22c55e"
+
 />
 
 </BarChart>
@@ -431,19 +435,22 @@ Price Difference
 </h2>
 
 <ResponsiveContainer
+
 width="100%"
+
 height={350}
+
 >
 
 <LineChart
+
 data={trendData}
+
 >
 
 <CartesianGrid strokeDasharray="3 3"/>
 
-<XAxis
-dataKey="name"
-/>
+<XAxis dataKey="name"/>
 
 <YAxis/>
 
@@ -468,7 +475,6 @@ strokeWidth={4}
 </ResponsiveContainer>
 
 </div>
-
 <div className="feature-box">
 
 <h2>
@@ -483,23 +489,11 @@ Market Snapshot
 
 <tr>
 
-<th>
+<th>Metric</th>
 
-Metric
+<th>Historical</th>
 
-</th>
-
-<th>
-
-Historical
-
-</th>
-
-<th>
-
-Current
-
-</th>
+<th>Current</th>
 
 </tr>
 
@@ -509,111 +503,51 @@ Current
 
 <tr>
 
-<td>
+<td>Average Price</td>
 
-Average Price
+<td>${historicalData.avgPrice.toFixed(2)}</td>
 
-</td>
-
-<td>
-
-${historicalData.avgPrice.toFixed(2)}
-
-</td>
-
-<td>
-
-${price.current_price.toFixed(2)}
-
-</td>
+<td>${price.current_price.toFixed(2)}</td>
 
 </tr>
 
 <tr>
 
-<td>
+<td>Average Volume</td>
 
-Average Volume
+<td>{(historicalData.avgVolume / 1000000).toFixed(1)} M</td>
 
-</td>
-
-<td>
-
-{(historicalData.avgVolume/1000000).toFixed(1)} M
-
-</td>
-
-<td>
-
-{(price.volume/1000000).toFixed(1)} M
-
-</td>
+<td>{(price.volume / 1000000).toFixed(1)} M</td>
 
 </tr>
 
 <tr>
 
-<td>
+<td>RSI</td>
 
-RSI
+<td>{historicalData.avgRSI}</td>
 
-</td>
-
-<td>
-
-{historicalData.avgRSI}
-
-</td>
-
-<td>
-
-{signal.rsi.toFixed(2)}
-
-</td>
+<td>{signal.rsi.toFixed(2)}</td>
 
 </tr>
 
 <tr>
 
-<td>
+<td>Sentiment</td>
 
-Sentiment
+<td>Neutral</td>
 
-</td>
-
-<td>
-
-Neutral
-
-</td>
-
-<td>
-
-{sentiment.mood}
-
-</td>
+<td>{sentiment.mood}</td>
 
 </tr>
 
 <tr>
 
-<td>
+<td>Recommendation</td>
 
-Recommendation
+<td>HOLD</td>
 
-</td>
-
-<td>
-
-HOLD
-
-</td>
-
-<td>
-
-{signal.signal}
-
-</td>
+<td>{signal.signal}</td>
 
 </tr>
 
@@ -622,6 +556,7 @@ HOLD
 </table>
 
 </div>
+
 <div className="summary-box">
 
 <h2>
@@ -632,25 +567,23 @@ AI Market Insight
 
 <p>
 
-The current market data for <b>{ticker}</b> is being compared against
-historical averages calculated from the 2014–2024 dataset.
+The current market performance of <b>{ticker}</b> is compared against
+historical market behaviour collected from the 2014–2024 dataset.
 
-The current trading price is
+The current stock price is
 
 <b>
 
 {" "}
-{price.current_price > historicalData.avgPrice
-? "above"
-: "below"}
+{price.current_price > historicalData.avgPrice ? "above" : "below"}
 
 {" "}
 
 </b>
 
-its long-term historical average.
+its historical average price.
 
-The RSI has moved from the historical average of
+The RSI has changed from
 
 <b>
 
@@ -668,21 +601,21 @@ to
 
 </b>
 
-which indicates
+indicating
 
 <b>
 
 {" "}
 
 {signal.rsi > 70
-? "an overbought market."
-: signal.rsi < 30
-? "an oversold market."
-: "normal market momentum."}
+  ? "an overbought condition."
+  : signal.rsi < 30
+  ? "an oversold condition."
+  : "normal market momentum."}
 
 </b>
 
-The live news sentiment is
+The latest news sentiment is
 
 <b>
 
@@ -691,7 +624,7 @@ The live news sentiment is
 
 </b>
 
-while the AI engine currently recommends
+and the AI prediction engine recommends
 
 <b>
 
@@ -700,12 +633,11 @@ while the AI engine currently recommends
 
 </b>
 
-for this stock.
+based on technical indicators, market momentum and financial news.
 
-Overall, this comparison allows investors to understand how today's
-market differs from the long-term behaviour observed over the previous
-decade, helping identify whether the stock is trading above or below
-its historical trend.
+This comparison enables investors to understand whether the current
+market behaviour differs significantly from long-term historical trends
+and assists in making more informed investment decisions.
 
 </p>
 
