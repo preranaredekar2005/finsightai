@@ -26,12 +26,21 @@ app.add_middleware(
 )
 
 # ── Serve React frontend ──────────────────────────────────────
-if os.path.exists("frontend/dist"):
-    app.mount("/assets", StaticFiles(directory="frontend/dist/assets"), name="assets")
+# Serve frontend only when running locally
+if os.path.exists("frontend/dist/assets"):
+    app.mount(
+        "/assets",
+        StaticFiles(directory="frontend/dist/assets"),
+        name="assets",
+    )
 
 @app.get("/app")
 def serve_frontend():
-    return FileResponse("frontend/dist/index.html")
+    if os.path.exists("frontend/dist/index.html"):
+        return FileResponse("frontend/dist/index.html")
+    return {
+        "message": "Frontend not bundled on this deployment."
+    }
 
 # ── Database (optional) ───────────────────────────────────────
 DATABASE_URL = os.getenv(
