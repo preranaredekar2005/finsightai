@@ -173,39 +173,64 @@ def fetch_av_price(ticker: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 # ── Helper: download price data ───────────────────────────────
-def download_price(ticker: str, period: str = "6mo") -> pd.DataFrame:
-    """Try yfinance first, fall back to Alpha Vantage."""
-    # Try yfinance
+def download_price(ticker: str, period="6mo"):
+
+    # ---------- yfinance ----------
     try:
-        data = yf.download(
-            ticker, period=period,
-            auto_adjust=True, progress=False,
-            timeout=15
+        df = yf.download(
+            ticker,
+            period=period,
+            auto_adjust=True,
+            progress=False,
+            timeout=20
         )
-        if not data.empty:
-            if isinstance(data.columns, pd.MultiIndex):
-                data.columns = [c[0] for c in data.columns]
-            print(f"yfinance success for {ticker}")
-            return data
-    except Exception as e:
-        print(f"yfinance failed for {ticker}: {e}")
 
-    # Try yf.Ticker fallback
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
+        if not df.empty:
+            df = df.replace([np.inf, -np.inf], np.nan)
+            df = df.dropna(subset=["Close"])
+
+            if not df.empty:
+                print(f"✓ yfinance success: {ticker}")
+                return df
+
+    except Exception as e:
+        print("yfinance:", e)
+
+    # ---------- yf.Ticker ----------
     try:
-        t    = yf.Ticker(ticker)
-        data = t.history(period=period, auto_adjust=True)
-        if not data.empty:
-            print(f"yf.Ticker success for {ticker}")
-            return data
-    except Exception as e:
-        print(f"yf.Ticker failed for {ticker}: {e}")
+        t = yf.Ticker(ticker)
+        df = t.history(period=period, auto_adjust=True)
 
-    # Fall back to Alpha Vantage
-    print(f"Trying Alpha Vantage for {ticker}...")
-    data = fetch_av_price(ticker)
-    if not data.empty:
-        print(f"Alpha Vantage success for {ticker}")
-    return data
+        if not df.empty:
+            df = df.replace([np.inf, -np.inf], np.nan)
+            df = df.dropna(subset=["Close"])
+
+            if not df.empty:
+                print(f"✓ yf.Ticker success: {ticker}")
+                return df
+
+    except Exception as e:
+        print("Ticker:", e)
+
+    # ---------- Alpha Vantage ----------
+    try:
+        df = fetch_av_price(ticker)
+
+        if not df.empty:
+            df = df.replace([np.inf, -np.inf], np.nan)
+            df = df.dropna(subset=["Close"])
+
+            if not df.empty:
+                print(f"✓ AlphaVantage success: {ticker}")
+                return df
+
+    except Exception as e:
+        print("AlphaVantage:", e)
+
+    return pd.DataFrame()
 
 # ── Helper: fetch live sentiment ──────────────────────────────
 def fetch_live_sentiment(ticker: str):
@@ -371,40 +396,81 @@ def get_tickers():
 def get_price(ticker: str, period: str = "6mo"):
     try:
         ticker = ticker.upper()
-        data   = download_price(ticker, period)
+        data = download_price(ticker, period)
 
         if data.empty:
-            raise HTTPException(404, f"No data for {ticker}")
+            raise HTTPException(404, f"No data found for {ticker}")
+
+        # -----------------------------
+        # Keep only required columns
+        # -----------------------------
+        cols = ["Open", "High", "Low", "Close", "Volume"]
+        data = data[cols].copy()
+
+        # Convert everything to numeric
+        for c in cols:
+            data[c] = pd.to_numeric(data[c], errors="coerce")
+
+        # Remove invalid rows
+        data = data.replace([np.inf, -np.inf], np.nan)
+        data = data.dropna(subset=["Close"])
+
+        if data.empty:
+            raise HTTPException(404, "No valid market data")
 
         data = data.reset_index()
         data["Date"] = pd.to_datetime(data["Date"]).dt.strftime("%Y-%m-%d")
 
+        current_close = float(data["Close"].iloc[-1])
+
+        previous_close = (
+            float(data["Close"].iloc[-2])
+            if len(data) > 1
+            else current_close
+        )
+
+        volume = (
+            int(data["Volume"].fillna(0).iloc[-1])
+            if not pd.isna(data["Volume"].iloc[-1])
+            else 0
+        )
+
+        history = []
+
+        for _, row in data.iterrows():
+
+            history.append({
+                "date": row["Date"],
+                "open": float(0 if pd.isna(row["Open"]) else row["Open"]),
+                "high": float(0 if pd.isna(row["High"]) else row["High"]),
+                "low": float(0 if pd.isna(row["Low"]) else row["Low"]),
+                "close": float(0 if pd.isna(row["Close"]) else row["Close"]),
+                "volume": int(0 if pd.isna(row["Volume"]) else row["Volume"])
+            })
+
         return {
-            "ticker":        ticker,
-            "period":        period,
-            "current_price": round(float(data["Close"].iloc[-1]), 2),
-            "prev_close":    round(float(data["Close"].iloc[-2]), 2),
-            "change":        round(float(data["Close"].iloc[-1] - data["Close"].iloc[-2]), 2),
-            "change_pct":    round(float((data["Close"].iloc[-1] - data["Close"].iloc[-2]) / data["Close"].iloc[-2] * 100), 2),
-            "high_52w":      round(float(data["Close"].max()), 2),
-            "low_52w":       round(float(data["Close"].min()), 2),
-            "volume":        int(data["Volume"].iloc[-1]),
-            "history": [
-                {
-                    "date":   row["Date"],
-                    "open":   round(float(row["Open"]),  2),
-                    "high":   round(float(row["High"]),  2),
-                    "low":    round(float(row["Low"]),   2),
-                    "close":  round(float(row["Close"]), 2),
-                    "volume": int(row["Volume"]),
-                }
-                for _, row in data.iterrows()
-            ]
+            "ticker": ticker,
+            "period": period,
+            "current_price": round(current_close, 2),
+            "prev_close": round(previous_close, 2),
+            "change": round(current_close - previous_close, 2),
+            "change_pct": round(
+                ((current_close - previous_close) / previous_close) * 100,
+                2,
+            )
+            if previous_close != 0
+            else 0,
+            "high_52w": round(float(data["Close"].max()), 2),
+            "low_52w": round(float(data["Close"].min()), 2),
+            "volume": volume,
+            "history": history,
         }
+
     except HTTPException:
         raise
+
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 # 3. ML Signal
 @app.get("/api/signal/{ticker}")
